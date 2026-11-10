@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de BMs</title>
+<style>
+:root{
+  --bg:#f4f6f9;--card:#fff;--text:#1c2430;--muted:#667085;--line:#e4e7ec;
+  --brand:#1f6feb;--ok:#12a150;--warn:#d99000;--bad:#d92d20;--chip:#eef2f7;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#0f141b;--card:#171e27;--text:#e6eaf0;--muted:#98a2b3;--line:#273140;--brand:#4b8df8;--chip:#222c38;}
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+header h1{font-size:18px;margin:0}
+header .sub{color:var(--muted);font-size:12px}
+main{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+label{font-weight:600;display:block;margin-bottom:6px}
+.hint{color:var(--muted);font-size:12px;margin-top:4px}
+input,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+textarea{min-height:44px;resize:vertical}
+.row{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+@media(max-width:700px){.row{grid-template-columns:1fr}}
+button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:wait}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.stat .n{font-size:26px;font-weight:700}
+.stat .l{color:var(--muted);font-size:12px}
+.bm-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.bm-head h2{margin:0;font-size:16px}
+.bm-head .id{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 8px}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;background:var(--chip);font-size:12px;font-weight:600}
+.badge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.ok::before{background:var(--ok)}.warn::before{background:var(--warn)}.bad::before{background:var(--bad)}
+.empty{color:var(--muted);font-size:13px;padding:6px 0}
+.err{background:#fdecea;color:#912018;border-radius:8px;padding:10px 12px;margin-top:12px;display:none}
+@media (prefers-color-scheme: dark){.err{background:#3a1512;color:#fda29b}}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.filters input{max-width:280px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Painel de BMs</h1>
+    <div class="sub">Status de portfólios, WhatsApp e contas de anúncio pela Graph API oficial da Meta</div>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <div>
+        <label for="token">Token de acesso</label>
+        <input id="token" type="password" placeholder="Cole aqui o token (usuário do sistema ou usuário)">
+        <div class="hint">Permissões: <b>business_management</b>, <b>whatsapp_business_management</b>, <b>ads_read</b>. O token fica só nesta aba e não é salvo.</div>
+      </div>
+      <div>
+        <label for="ids">IDs das BMs (opcional)</label>
+        <textarea id="ids" placeholder="Um por linha. Vazio = buscar todas"></textarea>
+        <div class="hint">Use se o token for de usuário do sistema.</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="go">Verificar BMs</button>
+      <button id="clear" class="ghost">Limpar</button>
+      <span id="status" class="hint"></span>
+    </div>
+    <div id="err" class="err"></div>
+  </section>
+
+  <div id="stats" class="stats" hidden></div>
+  <div class="filters" id="filters" hidden>
+    <input id="q" placeholder="Filtrar por nome, ID ou número…">
+  </div>
+  <div id="out"></div>
+</main>
+
+<script>
+const API = "https://graph.facebook.com/v21.0/";
+const $ = s => document.querySelector(s);
+let lastData = [];
+
+async function g(path, token){
+  const url = API + path + (path.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(token);
+  const r = await fetch(url);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message + (j.error.code ? " (código " + j.error.code + ")" : ""));
+  return j;
+}
+async function all(path, token){
+  let out = [], j = await g(path, token);
+  out.push(...(j.data||[]));
+  while (j.paging && j.paging.next){
+    const r = await fetch(j.paging.next); j = await r.json();
+    if (j.error) break; out.push(...(j.data||[]));
+  }
+  return out;
+}
+async function safe(fn){ try { return await fn(); } catch(e){ return {__err:e.message}; } }
+
+const PHONE_F = "id,display_phone_number,verified_name,quality_rating,messaging_limit_tier,name_status,code_verification_status,status,platform_type";
+const WABA_F = "id,name,account_review_status,business_verification_status,currency,timezone_id";
+const AD_F = "id,name,account_status,disable_reason,currency,amount_spent";
+
+async function loadBM(id, token){
+  const bm = await g(id + "?fields=id,name,verification_status,created_time", token);
+  const [owned, client, ads] = await Promise.all([
+    safe(()=>all(id + "/owned_whatsapp_business_accounts?fields=" + WABA_F + "&limit=100", token)),
+    safe(()=>all(id + "/client_whatsapp_business_accounts?fields=" + WABA_F + "&limit=100", token)),
+    safe(()=>all(id + "/owned_ad_accounts?fields=" + AD_F + "&limit=100", token)),
+  ]);
+  const wabas = [...(Array.isArray(owned)?owned:[]), ...(Array.isArray(client)?client.map(w=>({...w,_client:true})):[])];
+  for (const w of wabas){
+    const p = await safe(()=>all(w.id + "/phone_numbers?fields=" + PHONE_F + "&limit=100", token));
+    w.phones = Array.isArray(p) ? p : []; if (p.__err) w.phoneErr = p.__err;
+  }
+  bm.wabas = wabas;
+  bm.ads = Array.isArray(ads) ? ads : [];
+  bm.errs = [owned.__err, ads.__err].filter(Boolean);
+  return bm;
+}
+
+/* ---------- rótulos ---------- */
+const esc = s => String(s ?? "—").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const badge = (t, cls) => `<span class="badge ${cls||""}">${esc(t)}</span>`;
+const VER = {verified:["Verificada","ok"],not_verified:["Não verificada","warn"],pending:["Em análise","warn"],pending_submission:["Envio pendente","warn"],failed:["Reprovada","bad"],rejected:["Reprovada","bad"],expired:["Expirada","bad"],revoked:["Revogada","bad"],pending_need_more_info:["Precisa de mais info","warn"]};
+const ver = v => { const k=(v||"").toLowerCase(); const x=VER[k]; return x?badge(x[0],x[1]):badge(v||"—"); };
+const QUAL = {GREEN:["Alta","ok"],YELLOW:["Média","warn"],RED:["Baixa","bad"],UNKNOWN:["Sem dados",""],NA:["Sem dados",""]};
+const qual = v => { const x=QUAL[v]||[v||"—",""]; return badge(x[0],x[1]); };
+const TIER = {TIER_50:"50/dia",TIER_250:"250/dia",TIER_1K:"1.000/dia",TIER_2K:"2.000/dia",TIER_10K:"10.000/dia",TIER_100K:"100.000/dia",TIER_UNLIMITED:"Ilimitado"};
+const tier = v => esc(TIER[v] || v);
+const REVIEW = {APPROVED:["Aprovada","ok"],PENDING:["Em análise","warn"],REJECTED:["Reprovada","bad"]};
+const review = v => { const x=REVIEW[v]||[v||"—",""]; return badge(x[0],x[1]); };
+const PSTAT = {CONNECTED:["Conectado","ok"],PENDING:["Pendente","warn"],DISCONNECTED:["Desconectado","bad"],FLAGGED:["Sinalizado","bad"],RESTRICTED:["Restrito","bad"],BANNED:["Banido","bad"],MIGRATED:["Migrado",""],RATE_LIMITED:["Limitado","warn"],UNVERIFIED:["Não verificado","warn"]};
+const pstat = v => { const x=PSTAT[v]||[v||"—",""]; return badge(x[0],x[1]); };
+const NAME = {APPROVED:["Aprovado","ok"],AVAILABLE_WITHOUT_REVIEW:["Disponível","ok"],PENDING_REVIEW:["Em análise","warn"],DECLINED:["Recusado","bad"],EXPIRED:["Expirado","bad"],NONE:["—",""]};
+const nstat = v => { const x=NAME[v]||[v||"—",""]; return badge(x[0],x[1]); };
+const ADS = {1:["Ativa","ok"],2:["Desativada","bad"],3:["Pagamento pendente","warn"],7:["Em análise","warn"],8:["Liquidação pendente","warn"],9:["Período de carência","warn"],100:["Encerramento pendente","bad"],101:["Encerrada","bad"]};
+const adst = v => { const x=ADS[v]||[String(v??"—"),""]; return badge(x[0],x[1]); };
+const money = (v,c) => v==null ? "—" : (Number(v)/100).toLocaleString("pt-BR",{style:"currency",currency:c||"BRL"});
+
+/* ---------- render ---------- */
+function render(){
+  const q = ($("#q").value||"").toLowerCase().trim();
+  const data = !q ? lastData : lastData.filter(b => JSON.stringify(b).toLowerCase().includes(q));
+  let phones=0, green=0, risky=0, nVer=0, adsOk=0, adsBad=0;
+  for (const b of lastData){
+    if ((b.verification_status||"").toLowerCase()==="verified") nVer++;
+    for (const w of b.wabas) for (const p of w.phones){ phones++; if(p.quality_rating==="GREEN")green++; if(["RED","YELLOW"].includes(p.quality_rating)||["FLAGGED","RESTRICTED","BANNED"].includes(p.status))risky++; }
+    for (const a of b.ads){ a.account_status===1?adsOk++:adsBad++; }
+  }
+  const st = $("#stats"); st.hidden = false;
+  st.innerHTML = [
+    [lastData.length,"BMs"],[nVer,"BMs verificadas"],[phones,"Números WhatsApp"],
+    [green,"Números qualidade alta"],[risky,"Números em risco"],[adsOk,"Contas de anúncio ativas"],[adsBad,"Contas de anúncio com problema"]
+  ].map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  $("#filters").hidden = false;
+
+  $("#out").innerHTML = data.map(b => `
+    <section class="card">
+      <div class="bm-head">
+        <div><h2>${esc(b.name)}</h2><div class="id">ID ${esc(b.id)}${b.created_time?" · criada em "+new Date(b.created_time).toLocaleDateString("pt-BR"):""}</div></div>
+        <div>${ver(b.verification_status)}</div>
+      </div>
+      ${b.__err?`<div class="err" style="display:block">${esc(b.__err)}</div>`:""}
+      ${b.errs&&b.errs.length?`<div class="hint">Avisos: ${b.errs.map(esc).join(" · ")}</div>`:""}
+
+      <h3>WhatsApp (${(b.wabas||[]).length} contas)</h3>
+      ${(b.wabas||[]).length ? (b.wabas).map(w=>`
+        <div style="margin-bottom:10px">
+          <div><b>${esc(w.name)}</b> <span class="id" style="color:var(--muted);font-size:12px">· ${esc(w.id)}${w._client?" · cliente":""}</span> &nbsp; ${review(w.account_review_status)}</div>
+          ${w.phones.length ? `<div class="tbl"><table>
+            <tr><th>Número</th><th>Nome exibido</th><th>Status do nome</th><th>Qualidade</th><th>Limite</th><th>Status</th><th>Verificação</th></tr>
+            ${w.phones.map(p=>`<tr>
+              <td>${esc(p.display_phone_number)}</td><td>${esc(p.verified_name)}</td><td>${nstat(p.name_status)}</td>
+              <td>${qual(p.quality_rating)}</td><td>${tier(p.messaging_limit_tier)}</td><td>${pstat(p.status)}</td>
+              <td>${p.code_verification_status==="VERIFIED"?badge("Verificado","ok"):badge(p.code_verification_status||"—","warn")}</td></tr>`).join("")}
+          </table></div>` : `<div class="empty">${w.phoneErr?esc(w.phoneErr):"Nenhum número nesta conta."}</div>`}
+        </div>`).join("") : `<div class="empty">Nenhuma conta do WhatsApp.</div>`}
+
+      <h3>Contas de anúncio (${(b.ads||[]).length})</h3>
+      ${(b.ads||[]).length ? `<div class="tbl"><table>
+        <tr><th>Nome</th><th>ID</th><th>Status</th><th>Gasto total</th></tr>
+        ${b.ads.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.id)}</td><td>${adst(a.account_status)}</td><td>${money(a.amount_spent,a.currency)}</td></tr>`).join("")}
+      </table></div>` : `<div class="empty">Nenhuma conta de anúncio.</div>`}
+    </section>`).join("") || `<div class="card empty">Nada encontrado.</div>`;
+}
+
+/* ---------- ações ---------- */
+$("#go").onclick = async () => {
+  const token = $("#token").value.trim();
+  const err = $("#err"); err.style.display="none";
+  if (!token){ err.textContent="Cole o token de acesso."; err.style.display="block"; return; }
+  const btn = $("#go"); btn.disabled = true; $("#status").textContent = "Buscando…";
+  try{
+    let ids = $("#ids").value.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+    if (!ids.length){
+      const list = await all("me/businesses?fields=id&limit=100", token);
+      ids = list.map(b=>b.id);
+      if (!ids.length) throw new Error("Nenhuma BM encontrada para este token. Informe os IDs das BMs manualmente.");
+    }
+    lastData = [];
+    let i = 0;
+    for (const id of ids){
+      $("#status").textContent = `Verificando BM ${++i} de ${ids.length}…`;
+      lastData.push(await loadBM(id, token).catch(e=>({id,name:"BM "+id,__err:e.message,wabas:[],ads:[]})));
+      render();
+    }
+    $("#status").textContent = "Atualizado às " + new Date().toLocaleTimeString("pt-BR");
+  }catch(e){
+    err.textContent = e.message; err.style.display="block"; $("#status").textContent="";
+  }finally{ btn.disabled = false; }
+};
+$("#clear").onclick = () => { $("#token").value=""; $("#ids").value=""; lastData=[]; $("#out").innerHTML=""; $("#stats").hidden=true; $("#filters").hidden=true; $("#status").textContent=""; };
+$("#q").oninput = render;
+$("#token").addEventListener("keydown", e => { if (e.key==="Enter") $("#go").click(); });
+</script>
+</body>
+</html>
